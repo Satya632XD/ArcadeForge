@@ -1,0 +1,221 @@
+const express = require('express');
+const { query } = require('../db');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
+const { fail } = require('../middleware/error');
+const { cleanString, isUuid, mapGame, parsePositiveInt } = require('../utils');
+const { spendForGame } = require('../services/ledger');
+
+const router = express.Router();
+const MAX_SOURCE_BYTES = 200_000;
+
+function validateGameInput(body, partial = false) {
+  const out = {};
+  if (!partial || body.title !== undefined) out.title = cleanString(body.title, { min: 1, max: 100, name: 'Title' });
+  if (!partial || body.description !== undefined) out.description = typeof body.description === 'string' ? body.description.trim().slice(0, 5000) : '';
+  if (!partial || body.sourceCode !== undefined) {
+    if (typeof body.sourceCode !== 'string') throw fail(400, 'Source code must be a string.');
+    if (Buffer.byteLength(body.sourceCode, 'utf8') > MAX_SOURCE_BYTES) throw fail(413, 'Source code is too large. Maximum is 200 KB.');
+    out.sourceCode = body.sourceCode;
+  }
+  if (body.playPrice !== undefined || !partial) {
+    const value = body.playPrice === undefined ? 0 : body.playPrice;
+    if (!Number.isSafeInteger(value) || value < 0) throw fail(400, 'Play price must be a non-negative integer.');
+    if (value > 9_000_000_000_000_000) throw fail(400, 'Play price is too large.');
+    out.playPrice = value;
+  }
+  return out;
+}
+
+const publicSelect = `
+  SELECT g.id, g.creator_id, g.title, g.description, g.status, g.play_price, g.created_at, g.updated_at,
+         u.username AS creator_username, u.display_name AS creator_display_name,
+         COUNT(gs.id)::bigint AS play_count
+    FROM games g
+    JOIN users u ON u.id = g.creator_id
+    LEFT JOIN game_sessions gs ON gs.game_id = g.id
+`;
+
+router.get('/', optionalAuth, async (req, res, next) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
+    const sort = ['newest', 'popular', 'price_low', 'price_high'].includes(req.query.sort) ? req.query.sort : 'newest';
+    const page = parsePositiveInt(req.query.page, 1, 10000);
+    const limit = parsePositiveInt(req.query.limit, 12, 40);
+    const offset = (page - 1) * limit;
+
+    let orderBy = 'g.updated_at DESC';
+    if (sort === 'popular') orderBy = 'play_count DESC, g.updated_at DESC';
+    if (sort === 'price_low') orderBy = 'g.play_price ASC, g.updated_at DESC';
+    if (sort === 'price_high') orderBy = 'g.play_price DESC, g.updated_at DESC';
+
+    const params = [];
+    const where = [`g.status = 'published'`, `u.is_banned = false`];
+    if (q) {
+      params.push(`%${q.replace(/[%_]/g, '\\$&')}%`);
+      where.push(`(g.title ILIKE $${params.length} ESCAPE '\\' OR g.description ILIKE $${params.length} ESCAPE '\\' OR u.username ILIKE $${params.length} ESCAPE '\\')`);
+    }
+    params.push(limit, offset);
+    const result = await query(
+      `${publicSelect}
+       WHERE ${where.join(' AND ')}
+       GROUP BY g.id, u.username, u.display_name
+       ORDER BY ${orderBy}
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    res.json({ games: result.rows.map(mapGame), page, limit });
+  } catch (error) { next(error); }
+});
+
+router.get('/mine', requireAuth, async (req, res, next) => {
+  try {
+    const result = await query(
+      `${publicSelect}
+       WHERE g.creator_id = $1
+       GROUP BY g.id, u.username, u.display_name
+       ORDER BY g.updated_at DESC`,
+      [req.auth.id]
+    );
+    res.json({ games: result.rows.map(mapGame) });
+  } catch (error) { next(error); }
+});
+
+router.post('/', requireAuth, async (req, res, next) => {
+  try {
+    const input = validateGameInput(req.body);
+    const result = await query(
+      `INSERT INTO games (creator_id, title, description, source_code, play_price)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, creator_id, title, description, source_code, status, play_price, created_at, updated_at`,
+      [req.auth.id, input.title, input.description, input.sourceCode, input.playPrice]
+    );
+    res.status(201).json({ game: { ...mapGame({ ...result.rows[0], creator_username: req.auth.username, creator_display_name: req.auth.display_name, play_count: 0 }), sourceCode: result.rows[0].source_code } });
+  } catch (error) { next(error); }
+});
+
+router.get('/:id', optionalAuth, async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) throw fail(400, 'Invalid game id.');
+    const result = await query(
+      `SELECT g.id, g.creator_id, g.title, g.description, g.source_code, g.status, g.play_price, g.created_at, g.updated_at,
+              u.username AS creator_username, u.display_name AS creator_display_name,
+              COUNT(gs.id)::bigint AS play_count
+         FROM games g
+         JOIN users u ON u.id = g.creator_id
+         LEFT JOIN game_sessions gs ON gs.game_id = g.id
+        WHERE g.id = $1 AND (g.status = 'published' OR g.creator_id = $2)
+        GROUP BY g.id, u.username, u.display_name`,
+      [req.params.id, req.auth?.id || null]
+    );
+    if (!result.rows[0]) throw fail(404, 'Game not found.', 'GAME_NOT_FOUND');
+    const row = result.rows[0];
+    const response = { game: mapGame(row) };
+    if (req.auth?.id === row.creator_id) response.game.sourceCode = row.source_code;
+    res.json(response);
+  } catch (error) { next(error); }
+});
+
+router.patch('/:id', requireAuth, async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) throw fail(400, 'Invalid game id.');
+    const input = validateGameInput(req.body, true);
+    const fields = [];
+    const values = [req.params.id, req.auth.id];
+    let i = 3;
+    for (const [key, column] of [['title', 'title'], ['description', 'description'], ['sourceCode', 'source_code'], ['playPrice', 'play_price']]) {
+      if (input[key] !== undefined) {
+        fields.push(`${column} = $${i++}`);
+        values.push(input[key]);
+      }
+    }
+    if (!fields.length) throw fail(400, 'No changes supplied.');
+    fields.push('updated_at = now()');
+
+    const result = await query(
+      `UPDATE games SET ${fields.join(', ')}
+        WHERE id = $1 AND creator_id = $2 AND status <> 'removed'
+        RETURNING id, creator_id, title, description, source_code, status, play_price, created_at, updated_at`,
+      values
+    );
+    if (!result.rows[0]) throw fail(404, 'Game not found or not owned by you.', 'GAME_NOT_FOUND');
+    const row = result.rows[0];
+    res.json({ game: { id: row.id, creatorId: row.creator_id, title: row.title, description: row.description, sourceCode: row.source_code, status: row.status, playPrice: Number(row.play_price), createdAt: row.created_at, updatedAt: row.updated_at } });
+  } catch (error) { next(error); }
+});
+
+router.post('/:id/publish', requireAuth, async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) throw fail(400, 'Invalid game id.');
+    const result = await query(
+      `UPDATE games
+          SET status = 'published', updated_at = now()
+        WHERE id = $1 AND creator_id = $2 AND status <> 'removed'
+        RETURNING id, status, updated_at`,
+      [req.params.id, req.auth.id]
+    );
+    if (!result.rows[0]) throw fail(404, 'Game not found or not owned by you.', 'GAME_NOT_FOUND');
+    res.json({ game: result.rows[0] });
+  } catch (error) { next(error); }
+});
+
+router.post('/:id/unpublish', requireAuth, async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) throw fail(400, 'Invalid game id.');
+    const result = await query(
+      `UPDATE games
+          SET status = 'draft', updated_at = now()
+        WHERE id = $1 AND creator_id = $2 AND status = 'published'
+        RETURNING id, status, updated_at`,
+      [req.params.id, req.auth.id]
+    );
+    if (!result.rows[0]) throw fail(404, 'Game not found or not currently published.', 'GAME_NOT_FOUND');
+    res.json({ game: result.rows[0] });
+  } catch (error) { next(error); }
+});
+
+router.post('/:id/launch', requireAuth, async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id)) throw fail(400, 'Invalid game id.');
+    const result = await query(
+      `SELECT g.id, g.creator_id, g.title, g.description, g.source_code, g.status, g.play_price,
+              u.username AS creator_username, u.display_name AS creator_display_name
+         FROM games g JOIN users u ON u.id = g.creator_id
+        WHERE g.id = $1 AND g.status = 'published' AND u.is_banned = false`,
+      [req.params.id]
+    );
+    const game = result.rows[0];
+    if (!game) throw fail(404, 'Published game not found.', 'GAME_NOT_FOUND');
+
+    const price = Number(game.play_price);
+    const charge = await spendForGame({ playerId: req.auth.id, gameId: game.id });
+
+    res.status(201).json({
+      game: {
+        id: game.id,
+        title: game.title,
+        description: game.description,
+        sourceCode: game.source_code,
+        playPrice: price,
+        creator: { id: game.creator_id, username: game.creator_username, displayName: game.creator_display_name }
+      },
+      playSession: { id: charge.session.id, startedAt: charge.session.started_at, charged: charge.charged, amount: Number(charge.amount || 0) }
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/:id/end-session', requireAuth, async (req, res, next) => {
+  try {
+    if (!isUuid(req.params.id) || !isUuid(req.body.sessionId)) throw fail(400, 'Invalid id.');
+    const result = await query(
+      `UPDATE game_sessions SET ended_at = now()
+        WHERE id = $1 AND game_id = $2 AND player_id = $3 AND ended_at IS NULL
+        RETURNING id, ended_at`,
+      [req.body.sessionId, req.params.id, req.auth.id]
+    );
+    if (!result.rows[0]) throw fail(404, 'Active play session not found.', 'SESSION_NOT_FOUND');
+    res.json({ session: result.rows[0] });
+  } catch (error) { next(error); }
+});
+
+module.exports = router;
