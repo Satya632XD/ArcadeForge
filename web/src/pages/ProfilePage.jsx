@@ -1,0 +1,6 @@
+import React, { useEffect, useState } from 'react';
+import GameCard from '../components/GameCard';
+import Status from '../components/Status';
+import { api } from '../api/client';
+
+export default function ProfilePage({username}){const [data,setData]=useState(null);const [error,setError]=useState(null);useEffect(()=>{api.profile(username).then(setData).catch(setError)},[username]);if(error)return <div className="container page"><Status kind="error">{error.message}</Status></div>;if(!data)return <div className="container page"><div className="skeleton detail-skeleton"/></div>;return <div className="container page"><section className="profile-hero"><div className="profile-avatar">{data.profile.displayName.slice(0,1).toUpperCase()}</div><div><div className="eyebrow">CREATOR PROFILE</div><h1>{data.profile.displayName}</h1><p>@{data.profile.username} · Joined {new Date(data.profile.createdAt).toLocaleDateString()}</p></div></section><div className="section-heading"><div><div className="eyebrow">PUBLISHED</div><h2>Games</h2></div></div>{data.games.length?<div className="game-grid">{data.games.map(g=><GameCard key={g.id} game={g}/>)}</div>:<div className="empty-state">No published games yet.</div>}</div>}
