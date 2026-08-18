@@ -1,0 +1,11 @@
+import React, { useEffect, useState } from 'react';
+import Link from '../components/Link';
+import GameCard from '../components/GameCard';
+import Status from '../components/Status';
+import { api } from '../api/client';
+
+export default function DashboardPage() {
+  const [games,setGames]=useState([]); const [earnings,setEarnings]=useState(null); const [error,setError]=useState(null); const [profile,setProfile]=useState(null);
+  useEffect(()=>{Promise.all([api.myGames(),api.earnings(),api.meProfile()]).then(([g,e,p])=>{setGames(g.games);setEarnings(e);setProfile(p.profile)}).catch(setError)},[]);
+  return <div className="container page"><div className="page-title"><div><div className="eyebrow">CREATOR STUDIO</div><h1>Welcome back, {profile?.displayName || 'creator'}</h1><p>Manage your code, publish games, and track creator earnings.</p></div><Link to="/create" className="primary-btn">+ New game</Link></div>{error&&<Status kind="error">{error.message}</Status>}<div className="stats-grid"><div className="stat-card"><span>Games</span><b>{games.length}</b></div><div className="stat-card"><span>Total plays</span><b>{games.reduce((a,g)=>a+g.playCount,0).toLocaleString()}</b></div><div className="stat-card"><span>Creator earnings</span><b>◆ {(earnings?.totalEarned||0).toLocaleString()} GC</b></div></div><section className="section-heading"><div><div className="eyebrow">YOUR CATALOG</div><h2>Your games</h2></div></section>{games.length?<div className="game-grid">{games.map(g=><div key={g.id} className="studio-card-wrap"><GameCard game={g}/><Link to={`/edit/${g.id}`} className="studio-edit">Edit →</Link></div>)}</div>:<div className="empty-state"><h3>Your first game is waiting.</h3><p>Start with the included canvas starter and make it yours.</p><Link to="/create" className="primary-btn">Create game</Link></div>}{earnings&&<section className="panel earnings-panel"><div className="panel-title"><div><div className="eyebrow">EARNINGS</div><h2>Creator revenue by game</h2></div></div><div className="earnings-list">{earnings.games.length?earnings.games.map(g=><div className="earning-row" key={g.id}><div><b>{g.title}</b><span>Price: {g.playPrice} GC</span></div><strong>◆ {g.earned.toLocaleString()} GC</strong></div>):<div className="muted">No paid play revenue yet.</div>}</div></section>}</div>;
+}
