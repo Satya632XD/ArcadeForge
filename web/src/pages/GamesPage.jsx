@@ -6,7 +6,7 @@ import { go } from '../api/router';
 
 export default function GamesPage() {
   const [q, setQ] = useState(new URLSearchParams(location.search).get('q') || '');
-  const [sort, setSort] = useState(new URLSearchParams(location.search).get('sort') || 'newest');
+  const [sort, setSort] = useState(new URLSearchParams(location.search).get('sort') === 'popular' ? 'popular' : 'newest');
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -19,7 +19,7 @@ export default function GamesPage() {
     <div className="page-title"><div><div className="eyebrow">DISCOVER</div><h1>Find your next game</h1></div></div>
     <form className="search-row" onSubmit={e => { e.preventDefault(); go(`/games?q=${encodeURIComponent(q)}&sort=${sort}`); load(); }}>
       <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search games, creators, ideas..." />
-      <select value={sort} onChange={e => { setSort(e.target.value); load(q, e.target.value); }}><option value="newest">Newest</option><option value="popular">Popular</option><option value="price_low">Lowest price</option><option value="price_high">Highest price</option></select>
+      <select value={sort} onChange={e => { setSort(e.target.value); load(q, e.target.value); }}><option value="newest">Newest</option><option value="popular">Popular</option></select>
       <button className="primary-btn">Search</button>
     </form>
     {error && <Status kind="error">{error.message}</Status>}

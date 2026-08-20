@@ -2,7 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit').rateLimit;
 const { query } = require('../db');
 const { hashPassword, verifyPassword, createSession, revokeSession } = require('../services/auth');
-const { cookieName, env, sessionTtlDays } = require('../config');
+const { cookieName, cookieSameSite, cookieSecure, sessionTtlDays } = require('../config');
 const { optionalAuth, requireAuth } = require('../middleware/auth');
 const { fail } = require('../middleware/error');
 const { cleanString, toSafeUser } = require('../utils');
@@ -16,15 +16,15 @@ function setSessionCookie(res, token) {
     'HttpOnly',
     'Path=/',
     `Max-Age=${sessionTtlDays * 24 * 60 * 60}`,
-    'SameSite=Lax'
+    `SameSite=${cookieSameSite}`
   ];
-  if (env === 'production') parts.push('Secure');
+  if (cookieSecure) parts.push('Secure');
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 function clearSessionCookie(res) {
-  const parts = [`${encodeURIComponent(cookieName)}=`, 'HttpOnly', 'Path=/', 'Max-Age=0', 'SameSite=Lax'];
-  if (env === 'production') parts.push('Secure');
+  const parts = [`${encodeURIComponent(cookieName)}=`, 'HttpOnly', 'Path=/', 'Max-Age=0', `SameSite=${cookieSameSite}`];
+  if (cookieSecure) parts.push('Secure');
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 

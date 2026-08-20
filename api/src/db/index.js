@@ -1,9 +1,9 @@
 const { Pool } = require('pg');
-const { databaseUrl, env } = require('../config');
+const { databaseUrl, databaseSsl, databaseSslRejectUnauthorized } = require('../config');
 
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: env === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: databaseSsl ? { rejectUnauthorized: databaseSslRejectUnauthorized } : false,
   max: 10,
   idleTimeoutMillis: 30_000
 });

@@ -3,7 +3,6 @@ const { query } = require('../db');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { fail } = require('../middleware/error');
 const { cleanString, isUuid, mapGame, parsePositiveInt } = require('../utils');
-const { spendForGame } = require('../services/ledger');
 
 const router = express.Router();
 const MAX_SOURCE_BYTES = 200_000;
@@ -17,17 +16,11 @@ function validateGameInput(body, partial = false) {
     if (Buffer.byteLength(body.sourceCode, 'utf8') > MAX_SOURCE_BYTES) throw fail(413, 'Source code is too large. Maximum is 200 KB.');
     out.sourceCode = body.sourceCode;
   }
-  if (body.playPrice !== undefined || !partial) {
-    const value = body.playPrice === undefined ? 0 : body.playPrice;
-    if (!Number.isSafeInteger(value) || value < 0) throw fail(400, 'Play price must be a non-negative integer.');
-    if (value > 9_000_000_000_000_000) throw fail(400, 'Play price is too large.');
-    out.playPrice = value;
-  }
   return out;
 }
 
 const publicSelect = `
-  SELECT g.id, g.creator_id, g.title, g.description, g.status, g.play_price, g.created_at, g.updated_at,
+  SELECT g.id, g.creator_id, g.title, g.description, g.status, g.created_at, g.updated_at,
          u.username AS creator_username, u.display_name AS creator_display_name,
          COUNT(gs.id)::bigint AS play_count
     FROM games g
@@ -38,15 +31,13 @@ const publicSelect = `
 router.get('/', optionalAuth, async (req, res, next) => {
   try {
     const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) : '';
-    const sort = ['newest', 'popular', 'price_low', 'price_high'].includes(req.query.sort) ? req.query.sort : 'newest';
+    const sort = ['newest', 'popular'].includes(req.query.sort) ? req.query.sort : 'newest';
     const page = parsePositiveInt(req.query.page, 1, 10000);
     const limit = parsePositiveInt(req.query.limit, 12, 40);
     const offset = (page - 1) * limit;
 
     let orderBy = 'g.updated_at DESC';
     if (sort === 'popular') orderBy = 'play_count DESC, g.updated_at DESC';
-    if (sort === 'price_low') orderBy = 'g.play_price ASC, g.updated_at DESC';
-    if (sort === 'price_high') orderBy = 'g.play_price DESC, g.updated_at DESC';
 
     const params = [];
     const where = [`g.status = 'published'`, `u.is_banned = false`];
@@ -85,10 +76,10 @@ router.post('/', requireAuth, async (req, res, next) => {
   try {
     const input = validateGameInput(req.body);
     const result = await query(
-      `INSERT INTO games (creator_id, title, description, source_code, play_price)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, creator_id, title, description, source_code, status, play_price, created_at, updated_at`,
-      [req.auth.id, input.title, input.description, input.sourceCode, input.playPrice]
+      `INSERT INTO games (creator_id, title, description, source_code)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, creator_id, title, description, source_code, status, created_at, updated_at`,
+      [req.auth.id, input.title, input.description, input.sourceCode]
     );
     res.status(201).json({ game: { ...mapGame({ ...result.rows[0], creator_username: req.auth.username, creator_display_name: req.auth.display_name, play_count: 0 }), sourceCode: result.rows[0].source_code } });
   } catch (error) { next(error); }
@@ -98,7 +89,7 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
     if (!isUuid(req.params.id)) throw fail(400, 'Invalid game id.');
     const result = await query(
-      `SELECT g.id, g.creator_id, g.title, g.description, g.source_code, g.status, g.play_price, g.created_at, g.updated_at,
+      `SELECT g.id, g.creator_id, g.title, g.description, g.source_code, g.status, g.created_at, g.updated_at,
               u.username AS creator_username, u.display_name AS creator_display_name,
               COUNT(gs.id)::bigint AS play_count
          FROM games g
@@ -123,7 +114,7 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
     const fields = [];
     const values = [req.params.id, req.auth.id];
     let i = 3;
-    for (const [key, column] of [['title', 'title'], ['description', 'description'], ['sourceCode', 'source_code'], ['playPrice', 'play_price']]) {
+    for (const [key, column] of [['title', 'title'], ['description', 'description'], ['sourceCode', 'source_code']]) {
       if (input[key] !== undefined) {
         fields.push(`${column} = $${i++}`);
         values.push(input[key]);
@@ -135,12 +126,12 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
     const result = await query(
       `UPDATE games SET ${fields.join(', ')}
         WHERE id = $1 AND creator_id = $2 AND status <> 'removed'
-        RETURNING id, creator_id, title, description, source_code, status, play_price, created_at, updated_at`,
+        RETURNING id, creator_id, title, description, source_code, status, created_at, updated_at`,
       values
     );
     if (!result.rows[0]) throw fail(404, 'Game not found or not owned by you.', 'GAME_NOT_FOUND');
     const row = result.rows[0];
-    res.json({ game: { id: row.id, creatorId: row.creator_id, title: row.title, description: row.description, sourceCode: row.source_code, status: row.status, playPrice: Number(row.play_price), createdAt: row.created_at, updatedAt: row.updated_at } });
+    res.json({ game: { id: row.id, creatorId: row.creator_id, title: row.title, description: row.description, sourceCode: row.source_code, status: row.status, createdAt: row.created_at, updatedAt: row.updated_at } });
   } catch (error) { next(error); }
 });
 
@@ -178,7 +169,7 @@ router.post('/:id/launch', requireAuth, async (req, res, next) => {
   try {
     if (!isUuid(req.params.id)) throw fail(400, 'Invalid game id.');
     const result = await query(
-      `SELECT g.id, g.creator_id, g.title, g.description, g.source_code, g.status, g.play_price,
+      `SELECT g.id, g.creator_id, g.title, g.description, g.source_code, g.status,
               u.username AS creator_username, u.display_name AS creator_display_name
          FROM games g JOIN users u ON u.id = g.creator_id
         WHERE g.id = $1 AND g.status = 'published' AND u.is_banned = false`,
@@ -187,8 +178,12 @@ router.post('/:id/launch', requireAuth, async (req, res, next) => {
     const game = result.rows[0];
     if (!game) throw fail(404, 'Published game not found.', 'GAME_NOT_FOUND');
 
-    const price = Number(game.play_price);
-    const charge = await spendForGame({ playerId: req.auth.id, gameId: game.id });
+    const session = await query(
+      `INSERT INTO game_sessions (game_id, player_id)
+       VALUES ($1, $2)
+       RETURNING id, started_at`,
+      [game.id, req.auth.id]
+    );
 
     res.status(201).json({
       game: {
@@ -196,10 +191,9 @@ router.post('/:id/launch', requireAuth, async (req, res, next) => {
         title: game.title,
         description: game.description,
         sourceCode: game.source_code,
-        playPrice: price,
         creator: { id: game.creator_id, username: game.creator_username, displayName: game.creator_display_name }
       },
-      playSession: { id: charge.session.id, startedAt: charge.session.started_at, charged: charge.charged, amount: Number(charge.amount || 0) }
+      playSession: { id: session.rows[0].id, startedAt: session.rows[0].started_at }
     });
   } catch (error) { next(error); }
 });

@@ -16,7 +16,7 @@ router.get('/', requireAuth, async (req, res, next) => {
       [req.auth.id]
     );
     const games = await query(
-      `SELECT g.id, g.title, g.play_price,
+      `SELECT g.id, g.title,
               COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'creator_payout' AND t.to_user_id = $1), 0)::bigint AS earned
          FROM games g
          LEFT JOIN transactions t ON t.game_id = g.id
@@ -28,7 +28,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     res.json({
       totalEarned: Number(result.rows[0].total_earned),
       payoutCount: Number(result.rows[0].payout_count),
-      games: games.rows.map((g) => ({ id: g.id, title: g.title, playPrice: Number(g.play_price), earned: Number(g.earned) }))
+      games: games.rows.map((g) => ({ id: g.id, title: g.title, earned: Number(g.earned) }))
     });
   } catch (error) { next(error); }
 });

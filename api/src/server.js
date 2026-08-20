@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const { port, webOrigin } = require('./config');
+const { port, host, webOrigins } = require('./config');
 const { cookieParser } = require('./middleware/cookies');
 const { notFound, errorHandler } = require('./middleware/error');
 const authRoutes = require('./routes/auth');
@@ -15,11 +15,21 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
+function allowConfiguredOrigin(origin, callback) {
+  if (!origin || webOrigins.includes(origin)) return callback(null, true);
+  return callback(new Error('Origin is not allowed by CORS.'));
+}
+
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
   contentSecurityPolicy: false
 }));
-app.use(cors({ origin: webOrigin, credentials: true, methods: ['GET', 'POST', 'PATCH', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
+app.use(cors({
+  origin: allowConfiguredOrigin,
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json({ limit: '300kb' }));
 app.use(cookieParser);
 
@@ -39,6 +49,6 @@ app.use('/api/earnings', earningsRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
-app.listen(port, () => {
-  console.log(`API listening on http://localhost:${port}`);
+app.listen(port, host, () => {
+  console.log(`API listening on http://${host}:${port}`);
 });

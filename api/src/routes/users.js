@@ -52,7 +52,7 @@ router.get('/:username', optionalAuth, async (req, res, next) => {
     if (!user) throw fail(404, 'Profile not found.', 'PROFILE_NOT_FOUND');
 
     const gamesResult = await query(
-      `SELECT g.id, g.title, g.description, g.status, g.play_price, g.created_at, g.updated_at,
+      `SELECT g.id, g.title, g.description, g.status, g.created_at, g.updated_at,
               u.username AS creator_username, u.display_name AS creator_display_name,
               COUNT(gs.id) FILTER (WHERE gs.ended_at IS NULL OR gs.ended_at IS NOT NULL) AS play_count,
               g.creator_id
@@ -77,7 +77,6 @@ router.get('/:username', optionalAuth, async (req, res, next) => {
         title: g.title,
         description: g.description,
         status: g.status,
-        playPrice: Number(g.play_price),
         playCount: Number(g.play_count),
         creatorId: g.creator_id,
         creatorUsername: g.creator_username,

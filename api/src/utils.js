@@ -46,7 +46,6 @@ function mapGame(row) {
     title: row.title,
     description: row.description,
     status: row.status,
-    playPrice: Number(row.play_price),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     playCount: Number(row.play_count || 0)
