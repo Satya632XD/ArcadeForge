@@ -50,7 +50,7 @@ CREATE TABLE games (
   creator_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title           VARCHAR(100) NOT NULL,
   description     TEXT NOT NULL DEFAULT '',
-  source_code     TEXT NOT NULL,
+  source_code     TEXT NOT NULL DEFAULT '',
   status          VARCHAR(20) NOT NULL DEFAULT 'draft'
                     CHECK (status IN ('draft', 'published', 'removed')),
   play_price      BIGINT NOT NULL DEFAULT 0 CHECK (play_price >= 0),
@@ -59,6 +59,20 @@ CREATE TABLE games (
 );
 CREATE INDEX idx_games_creator ON games(creator_id);
 CREATE INDEX idx_games_status ON games(status);
+
+-- ------------------------------------------------------------
+-- GAME FILES
+-- ------------------------------------------------------------
+CREATE TABLE game_files (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  game_id         UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  path            VARCHAR(255) NOT NULL,
+  content         TEXT NOT NULL DEFAULT '',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(game_id, path)
+);
+CREATE INDEX idx_game_files_game ON game_files(game_id);
 
 -- ------------------------------------------------------------
 -- TRANSACTIONS

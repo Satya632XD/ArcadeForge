@@ -1,38 +1,48 @@
 import React, { useEffect, useState } from 'react';
-import Link from '../components/Link';
+import Studio from '../studio/Studio';
 import Status from '../components/Status';
 import { api } from '../api/client';
 import { go } from '../api/router';
 
-const starter = `const canvas = document.createElement('canvas');\ncanvas.width = 720;\ncanvas.height = 420;\ncanvas.style.width = '100%';\ndocument.body.appendChild(canvas);\nconst ctx = canvas.getContext('2d');\nlet x = 360;\nfunction loop(t) {\n  ctx.fillStyle = '#0b1020'; ctx.fillRect(0,0,canvas.width,canvas.height);\n  ctx.fillStyle = '#7df0b4'; ctx.beginPath(); ctx.arc(x,210,32,0,Math.PI*2); ctx.fill();\n  x = 360 + Math.sin(t / 600) * 250;\n  requestAnimationFrame(loop);\n}\nrequestAnimationFrame(loop);`;
-
 export default function CreateEditPage({ id }) {
   const edit = Boolean(id);
-  const [form, setForm] = useState({ title: '', description: '', sourceCode: starter });
+  const [game, setGame] = useState(null);
+  const [loading, setLoading] = useState(edit);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState('');
   const [status, setStatus] = useState('draft');
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     api.game(id)
-      .then(({ game }) => {
-        setForm({ title: game.title, description: game.description, sourceCode: game.sourceCode || '' });
-        setStatus(game.status);
+      .then(({ game: fetchedGame }) => {
+        setGame(fetchedGame);
+        setStatus(fetchedGame.status || 'draft');
       })
-      .catch(setError);
+      .catch(setError)
+      .finally(() => setLoading(false));
   }, [id]);
 
-  async function save(event) {
-    event.preventDefault();
+  async function handleSave({ title, description, files }) {
     setSaving(true);
     setError(null);
     setMessage('');
     try {
-      const data = edit ? await api.updateGame(id, form) : await api.createGame(form);
-      setMessage('Saved.');
-      if (!edit) go(`/edit/${data.game.id}`);
+      if (edit) {
+        const data = await api.updateGame(id, { title, description, files });
+        setGame(data.game);
+        setStatus(data.game.status);
+        setMessage('Game saved successfully.');
+      } else {
+        const data = await api.createGame({ title, description, files });
+        setMessage('Game created.');
+        go(`/edit/${data.game.id}`);
+      }
     } catch (saveError) {
       setError(saveError);
     } finally {
@@ -40,66 +50,68 @@ export default function CreateEditPage({ id }) {
     }
   }
 
-  async function publish() {
+  async function handlePublish() {
+    if (!id) return;
     setSaving(true);
     setError(null);
+    setMessage('');
     try {
-      if (status === 'published') {
-        await api.unpublish(id);
-        setStatus('draft');
-        setMessage('Unpublished.');
-      } else {
-        await api.publish(id);
-        setStatus('published');
-        setMessage('Published.');
-      }
-    } catch (publishError) {
-      setError(publishError);
+      await api.publish(id);
+      setStatus('published');
+      setMessage('Game published to Discover catalog.');
+    } catch (pubError) {
+      setError(pubError);
     } finally {
       setSaving(false);
     }
   }
 
-  if (error && edit && !form.title) {
-    return <div className="container page"><Status kind="error">{error.message}</Status></div>;
+  async function handleUnpublish() {
+    if (!id) return;
+    setSaving(true);
+    setError(null);
+    setMessage('');
+    try {
+      await api.unpublish(id);
+      setStatus('draft');
+      setMessage('Game reverted to draft.');
+    } catch (unpubError) {
+      setError(unpubError);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  return <div className="container page editor-page">
-    <div className="page-title">
-      <div>
-        <div className="eyebrow">CREATOR STUDIO</div>
-        <h1>{edit ? 'Edit game' : 'Create a game'}</h1>
-        <p>Write browser JavaScript. Save it as a draft, then publish when it is ready.</p>
+  if (loading) {
+    return (
+      <div className="container page" style={{ display: 'grid', placeItems: 'center', minHeight: '60vh' }}>
+        <div className="status info">Loading Studio…</div>
       </div>
-      <Link to="/dashboard" className="ghost-btn">Back to Studio</Link>
-    </div>
-    <form onSubmit={save} className="editor-layout">
-      <section className="panel editor-form">
-        <Field label="Title">
-          <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} maxLength="100" required />
-        </Field>
-        <Field label="Description">
-          <textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} maxLength="5000" rows="5" />
-        </Field>
-        <p className="muted">Published games are always free to launch and play.</p>
-        {error && <Status kind="error">{error.message}</Status>}
-        {message && <Status kind="success">{message}</Status>}
-        <div className="form-actions">
-          <button className="primary-btn" disabled={saving}>{saving ? 'Saving...' : 'Save game'}</button>
-          {edit && <button type="button" className="ghost-btn" disabled={saving} onClick={publish}>{status === 'published' ? 'Unpublish' : 'Publish'}</button>}
-        </div>
-      </section>
-      <section className="panel code-panel">
-        <div className="code-header">
-          <div><h2>JavaScript</h2><span>max 200 KB - runs only inside the sandbox</span></div>
-          <span className={`status-dot ${status}`}>{status}</span>
-        </div>
-        <textarea className="code-editor" spellCheck="false" value={form.sourceCode} onChange={(event) => setForm({ ...form, sourceCode: event.target.value })} />
-      </section>
-    </form>
-  </div>;
-}
+    );
+  }
 
-function Field({ label, children }) {
-  return <label className="field"><span>{label}</span>{children}</label>;
+  if (error && edit && !game) {
+    return (
+      <div className="container page">
+        <Status kind="error">{error.message || 'Failed to load game'}</Status>
+      </div>
+    );
+  }
+
+  return (
+    <Studio
+      initialTitle={game?.title || ''}
+      initialDescription={game?.description || ''}
+      initialFiles={game?.files || null}
+      initialSourceCode={game?.sourceCode || ''}
+      status={status}
+      saving={saving}
+      error={error}
+      message={message}
+      onSave={handleSave}
+      onPublish={handlePublish}
+      onUnpublish={handleUnpublish}
+      isEdit={edit}
+    />
+  );
 }
